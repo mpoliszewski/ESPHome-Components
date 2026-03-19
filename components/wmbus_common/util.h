@@ -44,11 +44,13 @@ uchar bcd2bin(uchar c);
 uchar revbcd2bin(uchar c);
 uchar reverse(uchar c);
 // A BCD std::string 102030405060 is reversed to 605040302010
-std::string reverseBCD(const std::string &v);
-// A hex std::string encoding ascii chars is reversed and safely translated into a readble std::string.
-std::string reverseBinaryAsciiSafeToString(const std::string &v);
+std::string reverseBCD(const std::string& v);
+// A hex std::string encoding ascii chars is reversed and safely translated into a readable std::string.
+std::string reverseBinaryAsciiSafeToString(const std::string& v);
+// A hex std::string encoding ascii chars is safely translated into a readable std::string.
+std::string binaryAsciiSafeToString(const std::string& v);
 // Check if hex std::string is likely to be ascii
-bool isLikelyAscii(const std::string &v);
+bool isLikelyAscii(const std::string& v);
 
 bool isHexChar(uchar c);
 

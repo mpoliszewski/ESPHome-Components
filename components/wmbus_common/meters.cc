@@ -348,6 +348,11 @@ void MeterCommonImplementation::markLastFieldAsLibrary()
     num_driver_fields_--;
 }
 
+FieldInfo *MeterCommonImplementation::lastAddedField()
+{
+    return &field_infos_.back();
+}
+
 void MeterCommonImplementation::addNumericFieldWithExtractor(std::string vname,
                                                              std::string help,
                                                              PrintProperties print_properties,
@@ -498,7 +503,9 @@ void MeterCommonImplementation::addNumericField(
 void MeterCommonImplementation::addStringFieldWithExtractor(std::string vname,
                                                             std::string help,
                                                             PrintProperties print_properties,
-                                                            FieldMatcher matcher)
+                                                            FieldMatcher matcher,
+                                                            string ixml,
+                                                            bool match_entire_payload)
 {
     size_t index = num_driver_fields_++;
     field_infos_.emplace_back(
@@ -520,6 +527,14 @@ void MeterCommonImplementation::addStringFieldWithExtractor(std::string vname,
                   NULL, /* Formula */
                   this /* Meter */
             ));
+    if (ixml != "")
+    {
+        field_infos_.back().useIXML(ixml);
+    }
+    if (match_entire_payload)
+    {
+        field_infos_.back().matchEntirePayload(true);
+    }
 }
 
 void MeterCommonImplementation::addStringFieldWithExtractorAndLookup(std::string vname,
@@ -691,6 +706,22 @@ MeterType toMeterType(std::string type)
 LIST_OF_METER_TYPES
 #undef X
     return MeterType::UnknownMeter;
+}
+
+const char *toString(ReadableString rs)
+{
+    if (rs == ReadableString::Unknown) return "Unknown";
+    if (rs == ReadableString::Normal) return "Normal";
+    if (rs == ReadableString::Reversed) return "Reversedl";
+
+    return "unknown";
+}
+
+ReadableString toReadableString(std::string rs)
+{
+    if (rs == "Normal") return ReadableString::Normal;
+    if (rs == "Reversed") return ReadableString::Reversed;
+    return ReadableString::Unknown;
 }
 
 std::string toString(DriverInfo &di)
@@ -1005,6 +1036,9 @@ bool MeterCommonImplementation::handleTelegram(AboutTelegram &about, std::vector
     // snprintf(log_prefix, 255, "(%s) log", driverName().str().c_str());
     // logTelegram(t.original, t.frame, t.header_size, t.suffix_size);
 
+    // Invoke ixml extractors!
+    processFieldIXMLs(&t);
+
     // Invoke standardized field extractors!
     processFieldExtractors(&t);
     if (hasProcessContent())
@@ -1026,6 +1060,89 @@ bool MeterCommonImplementation::handleTelegram(AboutTelegram &about, std::vector
     return true;
 }
 
+void MeterCommonImplementation::processFieldIXMLs(Telegram *t)
+{
+    // Iterate over the fields with IXMLs.
+    for (FieldInfo &fi : field_infos_)
+    {
+        if (fi.hasIXML())
+        {
+            if (fi.matchEntirePayload())
+            {
+                // Special case for mfct specific meters not compliant with difvif parsing.
+                vector<uchar> content;
+                t->extractPayload(&content);
+                string value = bin2hex(content);
+                debug("(ixml) parsing entire payload %s\n", value.c_str());
+                bool ok = parseWithIXML(t, t->header_size, value, fi.ixmlGrammar(), &t->dv_entries);
+                if (!ok)
+                {
+                    vector<uchar> frame;
+                    t->extractFrame(&frame);
+                    string hex = bin2hex(frame);
+
+                    warning("(meters) meter: %s failed to decode ixml field: %s over entire payload\n"
+                            "Please open an issue at https://github.com/wmbusmeters/wmbusmeters/\n"
+                            "and report this telegram: %s\n",
+                            name().c_str(),
+                            fi.vname().c_str(),
+                            hex.c_str());
+                }
+                continue;
+            }
+
+            if (!fi.hasMatcher())
+            {
+                debug("(meters) skipping IXML field without matcher %s(%s)[%d]...\n",
+                      fi.vname().c_str(),
+                      toString(fi.xuantity()),
+                      fi.index());
+                continue;
+            }
+
+            debug("(meters) IXML extracting for field %s(%s)[%d]\n",
+                  fi.vname().c_str(),
+                  toString(fi.xuantity()),
+                  fi.index());
+
+            for (auto &p : t->dv_entries)
+            {
+                DVEntry *dve = &p.second.second;
+                if (fi.matches(dve))
+                {
+                    // Simpler match for ixml fields right now.
+                    // No index test.
+                    debug("(meters) IXML using field info %s(%s)[%d] to extract %s at offset %d\n",
+                          fi.vname().c_str(),
+                          toString(fi.xuantity()),
+                          fi.index(),
+                          dve->dif_vif_key.str().c_str(),
+                          dve->offset);
+
+                    dve->addFieldInfo(&fi);
+                    fi.performExtraction(this, t, dve);
+                    string value = getStringValue(&fi);
+                    debug("(ixml) parsing field content %s\n", value.c_str());
+                    bool ok = parseWithIXML(t, dve->offset, value, fi.ixmlGrammar(), &t->dv_entries);
+                    if (!ok)
+                    {
+                        vector<uchar> frame;
+                        t->extractFrame(&frame);
+                        string hex = bin2hex(frame);
+
+                        warning("(meters) meter: %s failed to decode ixml field: %s\n"
+                                "Please open an issue at https://github.com/wmbusmeters/wmbusmeters/\n"
+                                "and report this telegram: %s\n",
+                                name().c_str(),
+                                fi.vname().c_str(),
+                                hex.c_str());
+                    }
+                }
+            }
+        }
+    }
+}
+
 void MeterCommonImplementation::processFieldExtractors(Telegram *t)
 {
     // Multiple dventries can be matched against a single wildcard FieldInfo.
@@ -1045,11 +1162,12 @@ void MeterCommonImplementation::processFieldExtractors(Telegram *t)
     // Now go through each field_info defined by the driver.
     for (FieldInfo &fi : field_infos_)
     {
+        if (fi.hasIXML()) continue; // The IXML fields have already been handled.
+
         int current_match_nr = 0;
 
         if (!fi.hasMatcher())
         {
-            // This field_info has not been matched to a dv_entry before!
             debug("(meters) skipping field without matcher %s(%s)[%d]...\n",
                   fi.vname().c_str(),
                   toString(fi.xuantity()),
@@ -1993,6 +2111,11 @@ bool FieldInfo::hasFormula()
     return formula_ != NULL;
 }
 
+bool FieldInfo::hasIXML()
+{
+    return ixml_grammar_.get() != NULL;
+}
+
 bool FieldInfo::matches(DVEntry *dve)
 {
     return matcher_.matches(*dve);
@@ -2008,6 +2131,18 @@ std::string FieldInfo::str()
                        toString(vif_scaling_),
                        matcher_.str().c_str(),
                        help_.c_str());
+}
+
+void FieldInfo::useIXML(const string& ixml)
+{
+    XMQDoc *g = xmqNewDoc();
+    bool b = xmqParseBufferWithType(g, ixml.c_str(), NULL, NULL, XMQ_CONTENT_IXML, 0);
+    if (!b) {
+        warning("(field) field %s failed to parse ixml grammar:\n--------------\n %s\n--------------\n", vname().c_str(), ixml.c_str());
+        xmqFreeDoc(g);
+        return;
+    }
+    ixml_grammar_ = shared_ptr<XMQDoc>(g, [](XMQDoc* d) { if (d) xmqFreeDoc(d); } );
 }
 
 DriverName MeterInfo::driverName()
@@ -2248,7 +2383,7 @@ bool FieldInfo::extractString(Meter *m, Telegram *t, DVEntry *dve)
         // t->addMoreExplanation(dve->offset, renderJsonText(m, dve));
         found = true;
     }
-    else if (matcher_.vif_range == VIFRange::Any ||
+    else if (readable_string_ != ReadableString::Unknown ||
              matcher_.vif_range == VIFRange::EnhancedIdentification ||
              matcher_.vif_range == VIFRange::FabricationNo ||
              matcher_.vif_range == VIFRange::HardwareVersion ||
@@ -2262,18 +2397,26 @@ bool FieldInfo::extractString(Meter *m, Telegram *t, DVEntry *dve)
              matcher_.vif_range == VIFRange::SpecialSupplierInformation ||
              matcher_.vif_range == VIFRange::ParameterSet)
     {
-        std::string extracted_id;
-        dve->extractReadableString(&extracted_id);
-        m->setStringValue(this, extracted_id, dve);
-        // t->addMoreExplanation(dve->offset, renderJsonText(m, dve));
+        std::string extracted;
+        if (readable_string_ == ReadableString::Reversed)
+        {
+            dve->extractReadableStringReversed(&extracted);
+        }
+        else
+        {
+            dve->extractReadableString(&extracted);
+        }
+        m->setStringValue(this, extracted, dve);
+        t->addMoreExplanation(dve->offset, renderJsonText(m, dve));
         found = true;
     }
     else
     {
-        error("Internal error: Cannot extract text std::string from vif %s in %s:%d\n",
-              toString(matcher_.vif_range),
-              __FILE__, __LINE__);
-
+        std::string extracted;
+        dve->extractHexString(&extracted);
+        m->setStringValue(this, extracted, dve);
+        if (!hasIXML()) t->addMoreExplanation(dve->offset, renderJsonText(m, dve));
+        found = true;
     }
     return found;
 }
@@ -2611,6 +2754,39 @@ bool MeterCommonImplementation::addOptionalLibraryFields(std::string field_names
             FieldMatcher::build()
             .set(MeasurementType::Instantaneous)
             .set(VIFRange::Volume)
+            .set(StorageNr(1))
+            );
+        markLastFieldAsLibrary();
+    }
+
+    if (checkIf(fields,"total_kwh"))
+    {
+        addNumericFieldWithExtractor(
+            "total",
+            "The total energy consumption recorded by this meter."+help,
+            DEFAULT_PRINT_PROPERTIES,
+            Quantity::Energy,
+            VifScaling::Auto,
+            DifSignedness::Signed,
+            FieldMatcher::build()
+            .set(MeasurementType::Instantaneous)
+            .set(VIFRange::AnyEnergyVIF)
+            );
+        markLastFieldAsLibrary();
+    }
+
+    if (checkIf(fields,"target_kwh"))
+    {
+        addNumericFieldWithExtractor(
+            "target",
+            "The energy recorded by this meter at the target date."+help,
+            DEFAULT_PRINT_PROPERTIES,
+            Quantity::Volume,
+            VifScaling::Auto,
+            DifSignedness::Signed,
+            FieldMatcher::build()
+            .set(MeasurementType::Instantaneous)
+            .set(VIFRange::AnyEnergyVIF)
             .set(StorageNr(1))
             );
         markLastFieldAsLibrary();
