@@ -149,6 +149,7 @@ STRING_FIELD_WITH_EXTRACTOR = Schema(
         Optional("info"): str,
         Optional("attributes", default=""): str,
         Required("match"): MATCHER_SCHEMA,
+        Optional("readable_string", default=""): str,
     }
 )
 
@@ -361,6 +362,10 @@ def constructor_expressions(driver):
                         attributes,
                         matcher,
                     )
+                    if readable_string := field.get("readable_string"):
+                        yield cg.RawExpression(
+                            f'lastAddedField()->setReadableString(toReadableString("{readable_string}"))'
+                        )
 
 
 def generate(xmq_content: str):
