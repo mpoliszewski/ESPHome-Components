@@ -63,9 +63,9 @@ void SX1276::setup() {
   uint8_t clock_output = 0b111;
   this->spi_write(0x24, clock_output);
 
-  ESP_LOGVV(TAG, "set sync word and reverse preamble polarity");
-  uint8_t reverse_preamble_sync_bytes = (1 << 5) | (1 << 4) | (2 - 1);
-  this->spi_write(0x27, {reverse_preamble_sync_bytes, 0x54, 0x3D});
+  ESP_LOGVV(TAG, "reverse preamble polarity, disable sync word (SyncOn=0 for T1+C1 support)");
+  uint8_t sync_config = (1 << 5);  // PreamblePolarity=1, SyncOn=0
+  this->spi_write(0x27, sync_config);
 
   ESP_LOGVV(TAG, "disable crc check/fixed packet length");
   uint8_t crc_check = 0;

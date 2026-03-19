@@ -46,8 +46,10 @@ struct Packet {
   BlockType block_type_ = BlockType::UNKNOWN;
 
   void trim_preamble();
+  int find_t1_delimiter_size();
   uint8_t l_field();
 
+  int t1_delimiter_size_ = 0;
   int8_t rssi_;
 };
 

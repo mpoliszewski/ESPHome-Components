@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xargs grep:*)",
+      "Bash(grep -rn \"onData\\\\|onNewFrame\\\\|frameReceived\\\\|handleData\\\\|receiveData\" /d/Prywatne/ESPHome-Components/components/wmbus_common/*.cc /d/Prywatne/ESPHome-Components/components/wmbus_common/*.h)",
+      "Bash(grep -n \"^.*{$\\\\|^[a-zA-Z].*{$\" /d/Prywatne/ESPHome-Components/components/wmbus_common/wmbus.cc)",
+      "Read(//d/Prywatne/ESPHome-Components/**)",
+      "Bash(grep -rn \"T1\\\\|T2\\\\|C1\\\\|C2\\\\|3of6\\\\|three_of_six\\\\|decode.*raw\\\\|frame.*format\" /d/Prywatne/ESPHome-Components/components/wmbus_common/*.cc /d/Prywatne/ESPHome-Components/components/wmbus_common/*.h)",
+      "Bash(grep -rn \"checkWMBus\\\\|PartialFrame\\\\|FullFrame\" /d/Prywatne/ESPHome-Components/components/wmbus_common/*.cc /d/Prywatne/ESPHome-Components/components/wmbus_common/*.h)",
+      "Bash(grep -rn \"manchester\\\\|3of6\\\\|three_of_six\\\\|encode\\\\|decode\" /d/Prywatne/ESPHome-Components/components/wmbus_common/*.cc /d/Prywatne/ESPHome-Components/components/wmbus_common/*.h)"
+    ]
+  }
+}
