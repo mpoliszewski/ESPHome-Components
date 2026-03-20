@@ -7,8 +7,8 @@
 
 #include "decode3of6.h"
 
-// 7 bytes: 2 mode C marks + 5 data bytes, or up to 4 bytes T1 delimiter + 3 bytes 3of6
-#define WMBUS_FRAME_PRELOAD_SIZE (7)
+// 3 bytes for mode C marks + len or first 3 bytes of mode T to decode into 2 bytes
+#define WMBUS_FRAME_PRELOAD_SIZE (3)
 
 // Mode C frame starts with \x54\xCD or \x54\x3D
 #define WMBUS_MODE_C_MARK (0x54)
@@ -152,16 +152,10 @@ bool Packet::validate_preamble() {
         is_preamble_valid = true;
       }
       break;
-    case LinkMode::T1: {
-      // Find T1 start delimiter size (bytes before valid 3of6 data)
-      auto delim_size = this->find_t1_delimiter_size();
-      if (delim_size >= 0) {
-        this->t1_delimiter_size_ = delim_size;
-        is_preamble_valid = true;
-        ESP_LOGV(TAG, "T1 raw [%s] delimiter=%d", format_hex_pretty(this->data_).c_str(), delim_size);
-      }
+    case LinkMode::T1:
+      // T1 frame has no block type
+      is_preamble_valid = true;
       break;
-    }
     default:
       break;
   }
@@ -173,23 +167,10 @@ bool Packet::validate_preamble() {
   return is_preamble_valid;
 }
 
-int Packet::find_t1_delimiter_size() {
-  for (int skip = 0; skip + 3 <= (int) this->data_.size(); skip++) {
-    std::vector<uint8_t> window(this->data_.begin() + skip, this->data_.begin() + skip + 3);
-    if (decode3of6(window))
-      return skip;
-  }
-  return -1;
-}
-
 void Packet::trim_preamble() {
   switch (this->link_mode()) {
     case LinkMode::C1:
       this->data_.erase(this->data_.begin(), this->data_.begin() + 2);
-      break;
-    case LinkMode::T1:
-      if (this->t1_delimiter_size_ > 0)
-        this->data_.erase(this->data_.begin(), this->data_.begin() + this->t1_delimiter_size_);
       break;
     default:
       break;
