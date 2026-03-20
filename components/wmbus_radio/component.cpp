@@ -44,8 +44,8 @@ void Radio::loop() {
   if (!frame)
     return;
 
-  ESP_LOGI(TAG, "Frame created (%zu bytes) [RSSI: %d, mode:%s%s]", frame->data().size(), frame->rssi(),
-           toString(frame->link_mode()), toString(frame->block_type()));
+  ESP_LOGI(TAG, "Frame created (%zu bytes) [RSSI: %d, mode:%s%s, id:%s]", frame->data().size(), frame->rssi(),
+           toString(frame->link_mode()), toString(frame->block_type()), frame->meter_id().c_str());
 
   uint8_t packet_handled = 0;
   for (auto &handler : this->frame_handlers_)
