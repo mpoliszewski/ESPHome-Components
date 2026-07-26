@@ -124,7 +124,7 @@ wmbus_meter:
   on_telegram:
     - socket_transmitter.send:
         id: transmitter
-        data: !lambda return meter.as_json();
+        data: !lambda return meter->as_json();
     - wmbus_meter.send_telegram_with_mqtt:
         topic: test/topic
 ```
