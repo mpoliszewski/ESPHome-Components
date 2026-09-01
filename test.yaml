@@ -1,3 +1,5 @@
+## This file is used to automated build check on GitHub Actions.
+
 esphome:
   name: test
 
@@ -7,7 +9,7 @@ esp32:
     type: esp-idf
 
 external_components:
-  - source: ../components
+  - source: ./components
 
 wifi:
   ssid: TestSSID

@@ -3,6 +3,8 @@
 
 namespace esphome {
 namespace wmbus_common {
+extern const std::vector<std::string> driver_names;
+
 class WMBusCommon : public Component {
  public:
   void dump_config() override;

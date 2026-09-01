@@ -1,7 +1,5 @@
 from pathlib import Path
 
-from jinja2 import Template
-
 from .driver import CppDriver, Driver, XmqDriver
 
 WMBUS_COMMON_PATH = Path(__file__).parents[1]
@@ -20,7 +18,7 @@ class DriverManager:
         self._all_drivers[driver.name] = driver
 
     def load_drivers(self) -> None:
-        for p in LEGACY_DRIVERS_PATH.glob("driver_*.cpp"):
+        for p in LEGACY_DRIVERS_PATH.glob("driver_*.cc"):
             self.__add_driver(CppDriver.from_source(p))
 
         for p in XMQ_DRIVERS_PATH.glob("*.xmq"):
@@ -35,38 +33,27 @@ class DriverManager:
         self._requested_drivers.add(driver)
         return driver
 
-    @property
-    def loader_content(self) -> str:
-        template_path = Path(__file__).parent / "driver_loader.c.j2"
-        template: Template = Template(
-            template_path.read_text(),
-            trim_blocks=True,
-            lstrip_blocks=True,
-        )
-
-        return template.render(names=sorted(d.name for d in self._requested_drivers))
-
     def sync_to_directory(self, target_dir: str | Path) -> None:
         target_dir = Path(target_dir)
         target_dir.mkdir(exist_ok=True, parents=True)
+        written_files = set()
 
         if not self._requested_drivers:
             self.request_driver("unknown")
 
-        files_to_write = {target_dir / "driver_loader.c": self.loader_content}
-
         for driver in self._requested_drivers:
-            files_to_write[target_dir / f"{driver.name}.cpp"] = driver.serialize()
+            target_path = target_dir / f"{driver.name}.cpp"
+            old_content = target_path.read_text() if target_path.exists() else ""
 
-        for path, content in files_to_write.items():
-            old_content = path.read_text() if path.exists() else ""
-            if old_content != content:
-                path.write_text(content)
+            new_content = driver.serialize()
+            if old_content != new_content:
+                target_path.write_text(new_content)
+            written_files.add(target_path)
 
         for root, dirs, files in target_dir.walk(top_down=False):
             for name in files:
                 path = Path(root) / name
-                if path not in files_to_write:
+                if path not in written_files:
                     path.unlink()
             for name in dirs:
                 path = Path(root) / name

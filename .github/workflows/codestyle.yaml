@@ -7,8 +7,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@v2
       - name: Check code style with clang-format
-        run: python3 scripts/clang_format_check.py
+        run: python3 scripts/clang-format-check.py
 
 

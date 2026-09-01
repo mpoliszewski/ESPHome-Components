@@ -6,7 +6,8 @@ import sys
 from pathlib import Path
 
 # Resolve project root (parent of script directory) once
-parent_dir = Path(__file__).resolve().parents[2]
+script_dir = Path(__file__).resolve().parent
+parent_dir = script_dir.parent
 
 
 def run(cmd):

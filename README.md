@@ -1,55 +1,6 @@
 # ESPHome Components
 
-![ESPHome](https://img.shields.io/badge/dynamic/yaml?url=https%3A%2F%2Fraw.githubusercontent.com%2FIoTLabs-pl%2FESPHome-Components%2Frefs%2Fheads%2Fmaster%2F.github%2Fworkflows%2Fbuild.yaml&query=%24.jobs.build.steps...with.version&label=ESPHome&style=for-the-badge&color=f3922d&labelColor=2b4c5a)
-![GitHub License](https://img.shields.io/github/license/IoTLabs-pl/esphome-components?style=for-the-badge&color=f3922d&labelColor=2b4c5a)
-
-This repository contains custom [ESPHome](https://esphome.io/) components for devices developed by [IoTLabs](https://iotlabs.pl).
-
-## `panasonic_aquarea`
-This component allows to communicate with Panasonic Aquarea heat pumps using their serial interface. It supports reading various parameters from the heat pump, such as temperature, pressure, and operating mode.
-
-Heavily based on [Heishamon](https://github.com/heishamon/HeishaMon). Thanks to the authors for grunt work of reverse-engineering the proprietary protocol used by Panasonic Aquarea heat pumps and making it available to the public.
-
-**Example configuration:**
-
-```yaml
-uart:
-  - id: heatpump_uart
-    tx_pin: GPIO0
-    rx_pin: GPIO1
-    baud_rate: 9600
-    data_bits: 8
-    parity: EVEN
-    stop_bits: 1
-# optional UART for CZ-TAW1 remote controller
-  - id: remote_uart
-    tx_pin: GPIO2
-    rx_pin: GPIO3
-    baud_rate: 9600
-    data_bits: 8
-    parity: EVEN
-    stop_bits: 1
-
-panasonic_aquarea:
-  uart_id: heatpump_uart
-  external_controller_uart_id: remote_uart
-
-sensor:
-  - platform: panasonic_aquarea
-    top: 1
-  - platform: panasonic_aquarea
-    top: 5
-
-switch:
-  - platform: panasonic_aquarea
-    set: 1
-  - platform: panasonic_aquarea
-    set: 10
-```
-All available entities are listed in the catalogs:
-- [by Entity Type](docs/panasonic_aquarea/entities/by_entity_type.md)
-- [by Heishamon ID](docs/panasonic_aquarea/entities/by_id.md)
-- [by Name](docs/panasonic_aquarea/entities/by_name.md)
+This repository contains custom [ESPHome](https://esphome.io/) components for devices developed by IoTLabs.
 
 ## `socket_transmitter`
 
@@ -124,7 +75,7 @@ wmbus_meter:
   on_telegram:
     - socket_transmitter.send:
         id: transmitter
-        data: !lambda return meter->as_json();
+        data: !lambda return meter.as_json();
     - wmbus_meter.send_telegram_with_mqtt:
         topic: test/topic
 ```
@@ -194,6 +145,3 @@ wmbus_radio:
 For SX1276, `reset_pin` should be connected to the reset pin and `irq_pin` should be connected to the DIO1 pin of the radio module.
 
 The `on_frame` trigger can be used to send received wM-Bus packets to a remote server using `socket_transmitter` component. It can also be used to process packets in any other way, such as sending them to MQTT broker or HTTP server.
-
-### Disclaimer
-`wmbus_*` components are based on work of [SzczepanLeon's ESPHome Components repository](https://github.com/SzczepanLeon/esphome-components). Thanks to the authors for their work and making it available to the public.
