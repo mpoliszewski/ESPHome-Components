@@ -89,7 +89,7 @@ void SX1276::setup() {
 bool IRAM_ATTR SX1276::read(uint8_t *buffer, size_t length) {
   while (length > 0) {
     if (this->irq_pin_->digital_read()) {
-      if (!ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1))) {
+      if (!ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2))) {
         return false;
       }
     }

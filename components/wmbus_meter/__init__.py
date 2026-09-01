@@ -32,10 +32,10 @@ MULTI_CONF = True
 
 wmbus_meter_ns = cg.esphome_ns.namespace("wmbus_meter")
 Meter = wmbus_meter_ns.class_("Meter", cg.Component)
-MeterRef = Meter.operator("ref")
+MeterPtr = Meter.operator("ptr")
 TelegramTrigger = wmbus_meter_ns.class_(
     "TelegramTrigger",
-    automation.Trigger.template(MeterRef),
+    automation.Trigger.template(MeterPtr),
 )
 
 
@@ -104,7 +104,7 @@ async def to_code(config):
         trig = cg.new_Pvariable(conf[CONF_TRIGGER_ID], meter)
         await automation.build_automation(
             trig,
-            [(MeterRef, "meter")],
+            [(MeterPtr, "meter")],
             conf,
         )
 
@@ -117,7 +117,7 @@ TELEGRAM_MQTT_PUBLISH_ACTION_SCHEMA = cv.All(
             )
         }
     ),
-    lambda c: {**c, CONF_PAYLOAD: cv.Lambda("return meter.as_json();")},
+    lambda c: {**c, CONF_PAYLOAD: cv.Lambda("return meter->as_json();")},
 )
 
 
