@@ -183,13 +183,14 @@ wmbus_radio:
   cs_pin: GPIO3
   reset_pin: GPIO4
   dio1_pin: GPIO5
+  lna_boost: true
   on_frame:
     - wmbus_radio.send_frame_with_socket:
         id: transmitter
         format: rtlwmbus
 ```
 
-`reset_pin` and `dio1_pin` go to the RESET and DIO1 pins of the radio module. `irq_pin` is the old name of `dio1_pin`; it still works with a deprecation warning and will be removed in 2027.3.0.
+`reset_pin` and `dio1_pin` go to the RESET and DIO1 pins of the radio module. `irq_pin` is the old name of `dio1_pin`; it still works with a deprecation warning and will be removed in 2027.3.0. For SX1276 only, `lna_boost` is an optional boolean setting (default `false`) that enables the HF receiver LNA boost during setup. It does not change transmit power and is not a runtime Home Assistant switch. Boosted gain can use more current and may not improve reception in environments with strong interference or very strong signals.
 
 **SX1262 example:**
 

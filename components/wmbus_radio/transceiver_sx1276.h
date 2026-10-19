@@ -7,6 +7,8 @@ namespace wmbus_radio {
 
 class SX1276 final : public Transceiver {
  public:
+  void set_lna_boost(bool enabled) { this->lna_boost_ = enabled; }
+
   void setup() override;
   void start_receiver(TaskHandle_t receiver_task) override;
   void reset_receiver() override;
@@ -17,6 +19,7 @@ class SX1276 final : public Transceiver {
  private:
   enum class Register : uint8_t;
   InterruptContext data_ready_interrupt_;
+  bool lna_boost_{false};
 
   uint8_t read_register(Register address);
   void write_register(Register address, std::initializer_list<uint8_t> data);

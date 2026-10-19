@@ -14,6 +14,7 @@ enum class SX1276::Register : uint8_t {
   BITRATE_MSB = 0x02,
   FDEV_MSB = 0x04,
   FRF_MSB = 0x06,
+  LNA = 0x0C,
   RX_CONFIG = 0x0D,
   RSSI_CONFIG = 0x0E,
   RSSI_VALUE = 0x11,
@@ -78,6 +79,13 @@ void SX1276::setup() {
   ESP_LOGVV(TAG, "enable auto agc/afc");
   constexpr uint8_t agc_afc = (1 << 4) | (1 << 3) | 0b110;
   this->write_register(Register::RX_CONFIG, {agc_afc});
+
+  if (this->lna_boost_) {
+    uint8_t lna = this->read_register(Register::LNA);
+    lna = (lna & 0xFC) | 0x03;
+    this->write_register(Register::LNA, {lna});
+    ESP_LOGI(TAG, "SX1276 HF LNA boost enabled");
+  }
 
   ESP_LOGVV(TAG, "disable clock output");
   this->write_register(Register::OSC, {0b111});
