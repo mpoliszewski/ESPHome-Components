@@ -7,6 +7,7 @@ driver {
     transform_payload = try_qundis_decode
     detect {
         mvt = QDS,33,37
+        mvt = QDS,33,06
         mvt = QDS,35,06
         mvt = QDS,35,07
         mvt = QDS,35,37
@@ -230,16 +231,17 @@ driver {
             //   [4]   0x00     reserved
             //   [5]   flags    device-specific status/flags (format unknown)
             //   [6]   0x00/01  extra flag
-            //   [7]   0x07     constant (possibly number of data records)
+            //   [7]   0x07/00  not constant: 0x07 on the version 0x18/0x19 meters, 0x00 on a
+            //                  version 0x1A water meter whose block is otherwise identical
             //   [8]   0xC1     meter type: 0xB0=HCA, 0xC0=heat, 0xC1=warm/cold water
             // Byte [9] is the VIF (0x13 = volume in liters), which is matched below.
             // The 9-byte header is validated against its fixed bytes ([0]=00, [1]=82,
-            // [3]=00, [4]=00, [7]=07, [8]=C1 warm/cold water) so that a block with an
+            // [3]=00, [4]=00, [8]=C1 warm/cold water) so that a block with an
             // unexpected layout (e.g. an encrypted/non-walk-by payload that merely
             // happens to carry the 0DFF5F difvifkey) fails closed instead of having
             // total_m3/target_*/volume_delta_* invented from the wrong offsets.
             // See issue #1916.
-            ixml = "decode = -'00', -'82', byte, -'00', -'00', byte, byte, -'07', -'C1', volume_l.
+            ixml = "decode = -'00', -'82', byte, -'00', -'00', byte, byte, byte, -'C1', volume_l.
 
                     volume_l = '13', error_date, total_l, target_year_date, target_year_l, target_date, target_l, delta1, delta2, delta3, delta4, delta5, delta6, delta7, delta8, delta9, delta10, delta11, delta12, -pad.
 
@@ -427,6 +429,13 @@ driver {
             fields   = 'MyQWater19;51341234;OK;28.774;1111-11-11 11:11.11'
         }
         test {
+            args     = 'MyQWater1A qwaterv2 12345678 NOKEY'
+            comment  = 'Version 0x1A water meter, walk by telegram with mfct data. Header byte [7] is 0x00, not 0x07. Real telegram, A-field replaced.'
+            telegram = 49449344785634121A07780DFF5F350082720000800000C113FFFF029000003F3C192500005F330073000000000000000000000000000000004700B100B1008600A8002F046D00135E34
+            json     = '{"_":"telegram","media":"water","driver":"qwaterv2","name":"MyQWater1A","id":"12345678","target_m3":7.3,"target_date":"2026-03-31","target_year_m3":2.519,"target_year_date":"2025-12-31","total_m3":9.002,"volume_delta_10_m3":0.177,"volume_delta_11_m3":0.177,"volume_delta_12_m3":0.134,"volume_delta_13_m3":0.168,"volume_delta_2_m3":0,"volume_delta_3_m3":0,"volume_delta_4_m3":0,"volume_delta_5_m3":0,"volume_delta_6_m3":0,"volume_delta_7_m3":0,"volume_delta_8_m3":0,"volume_delta_9_m3":0.071,"meter_datetime":"2026-04-30 19:00","status":"OK","timestamp":"1111-11-11T11:11:11Z"}'
+            fields   = 'MyQWater1A;12345678;OK;9.002;1111-11-11 11:11.11'
+        }
+        test {
             args     = 'AESTest qwaterv2 14356101 000102030405060708090A0B0C0D0E0F'
             comment  = 'Encrypted Q walk-by block (header byte[4]=0x35). AES-128-CBC EN 13757-7 Mode 5 with the configured key, Mode-5 IV (M-field+A-field+ACC*8, ACC=header byte[2]). The body decrypts to the legacy plaintext layout and is parsed by the unchanged ixml grammar. The telegram and key are synthetic (not real Qundis material) so the test is self-contained. See issue #1916/#2025.'
             telegram = 49449344016135141907780DFF5F350082C100353E44AAFEDB237BDBA569404984A09F6DD12E32C2F03DD335E259DD446711256309CC4E894B4C7D8CC427C7491B94FF05046D160A4F38
@@ -446,6 +455,13 @@ driver {
             telegram = 49449344380117601A07780DFF5F350082B50035512F79A321C70F8FD90041D03F7633718457556C82E3A6CB5A20617A9523867033C80F9D21054140A90BC438C04F1E9D046D3B125832
             json     = '{"_":"telegram","driver":"qwaterv2","id":"60170138","media":"water","meter_datetime":"2026-02-24 18:59","name":"RealKeyWater","status":"OK","target_date":"2026-01-31","target_m3":24.086,"target_year_date":"2025-12-31","target_year_m3":20.552,"timestamp":"1111-11-11T11:11:11Z","total_m3":26.546,"volume_delta_10_m3":0.338,"volume_delta_11_m3":0.338,"volume_delta_12_m3":0.363,"volume_delta_13_m3":0.353,"volume_delta_2_m3":-32.768,"volume_delta_3_m3":-32.768,"volume_delta_4_m3":-32.768,"volume_delta_5_m3":-32.768,"volume_delta_6_m3":0.003,"volume_delta_7_m3":0.334,"volume_delta_8_m3":0.343,"volume_delta_9_m3":0.336}'
             fields   = 'RealKeyWater;60170138;OK;26.546;1111-11-11 11:11.11'
+        }
+        test {
+            args     = 'QModule55 qwaterv2 35511848 NOKEY'
+            comment  = 'Qundis Q module 5.5 water, detected by the enhanced id QDS,33,06'
+            telegram = 53449344481851353337e88878077948185135934433060dff5f350038ba82760000810007c113ffff83150500ff1e392c420205001f31321305007b008e006641a3005a0066005e00850044006100960073f5ac006d002f046d1d0c07327f9e
+            json     = '{"_":"telegram","media":"radio converter (meter side)","driver":"qwaterv2","name":"QModule55","id":"35511848","target_m3":51.332,"target_date":"2024-01-31","target_year_m3":50.242,"target_year_date":"2023-12-31","total_m3":51.583,"volume_delta_10_m3":0.097,"volume_delta_11_m3":0.15,"volume_delta_12_m3":0.115,"volume_delta_13_m3":0.109,"volume_delta_2_m3":0.123,"volume_delta_3_m3":0.142,"volume_delta_4_m3":0.102,"volume_delta_5_m3":0.09,"volume_delta_6_m3":0.102,"volume_delta_7_m3":0.094,"volume_delta_8_m3":0.133,"volume_delta_9_m3":0.068,"enhanced_id":"0633449335511848","meter_datetime":"2024-02-07 12:29","status":"OK","timestamp":"1111-11-11T11:11:11Z"}'
+            fields   = 'QModule55;35511848;OK;51.583;1111-11-11 11:11.11'
         }
     }
 }

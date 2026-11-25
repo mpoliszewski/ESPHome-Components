@@ -1,6 +1,7 @@
 """Replays the XMQ drivers' tests{} telegrams through the host build against upstream's JSON.
 
 Needs esphome importable and wmbus-test-runner, the compiled test.yaml, on PATH: run it from the esphome venv.
+Set WMBUS_TEST_TZ to exercise another time zone; the default is Europe/Warsaw.
 """
 
 import json
@@ -8,7 +9,7 @@ import os
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cache
 from pathlib import Path
 
@@ -31,17 +32,23 @@ ENVELOPE_KEYS = {"_", "driver", "id", "name", "timestamp", "rssi_dbm"}
 # Each traced to upstream's own code; the xfail is strict, so a fix must delete its line.
 KNOWN_DECODE_DIFFS = {
     "actislink-ANYID": "addressed as ANYID and encrypted with DES",
+    "elf2-21400916": "test telegram is shorter than its L-field",
     "hcae2-54423117#4": "delta_14_half_months_ago_hca untraced",
+    "hcae2-81710547": "test telegram is shorter than its L-field",
     "kamwater-52525252#2": "synthetic test telegram has wrong length and KAM manufacturer instead of KAW",
     "kamwater-52525252#3": "synthetic test telegram has wrong length and KAM manufacturer instead of KAW",
+    "qwaterv2-35511848": "test telegram still carries the frame format A block CRCs",
 }
 
 # Overlapping mvt lines: `type: auto` picks whichever driver the registry holds first.
 KNOWN_DETECTION_DIFFS = {
     "actislink-ANYID": "addressed as ANYID and encrypted with DES",
+    "elf2-21400916": "test telegram is shorter than its L-field",
+    "hcae2-81710547": "test telegram is shorter than its L-field",
     "kamwater-52525252#2": "synthetic test telegram has wrong length and KAM manufacturer instead of KAW",
     "kamwater-52525252#3": "synthetic test telegram has wrong length and KAM manufacturer instead of KAW",
     "mkradio4a-01770002": "same mvt line as weh_07",
+    "qwaterv2-35511848": "test telegram still carries the frame format A block CRCs",
 }
 
 # Upstream separates frame layers for readability; stripping here keeps the decoder's hex parsing strict.
@@ -57,6 +64,7 @@ class Case:
     telegrams: list[str]
     expected: dict
     comment: str
+    auto_detect: bool = True
 
 
 def split_telegrams(value: str) -> list[str]:
@@ -194,6 +202,7 @@ def collect_cases() -> list[Case]:
                     telegrams=[as_heard(t) for t in split_telegrams(test["telegram"])],
                     expected=expected,
                     comment=" ".join(as_list(test.get("comment"))),
+                    auto_detect=test.get("auto_detect") != "false",
                 )
             )
     return cases
@@ -224,22 +233,16 @@ def parameters(known_diffs: dict[str, str]):
     return params
 
 
-def run_batch(as_auto: bool) -> dict[str, str]:
-    """as_auto sends every case to a meter without a driver, as `type: auto` leaves one."""
-    cases = [c for c in CASES if c.driver in NAMES]
-    stdin = "".join(
-        "\t".join(
-            ["auto" if as_auto else NAMES[c.driver], c.meter_id, c.key, ",".join(c.telegrams)]
-        )
-        + "\n"
-        for c in cases
-    )
+def run(lines: list[list[str]]) -> list[str]:
+    """The runner's answer to each driver, meter id, key and telegrams line."""
+    stdin = "".join("\t".join(line) + "\n" for line in lines)
     result = subprocess.run(
         ["wmbus-test-runner"],
         input=stdin,
         capture_output=True,
         text=True,
-        env={**os.environ, "TZ": "UTC"},
+        # Not UTC by default: decoded dates must not depend on the device's time zone.
+        env={**os.environ, "TZ": os.environ.get("WMBUS_TEST_TZ", "Europe/Warsaw")},
     )
 
     answers = [
@@ -247,11 +250,22 @@ def run_batch(as_auto: bool) -> dict[str, str]:
         for line in result.stdout.splitlines()
         if line.startswith(RESULT_PREFIX) or line.startswith(ERROR_PREFIX)
     ]
-    if len(answers) != len(cases):
+    if len(answers) != len(lines):
         pytest.fail(
-            f"runner answered {len(answers)} of {len(cases)} cases "
+            f"runner answered {len(answers)} of {len(lines)} cases "
             f"(exit {result.returncode})\n{result.stderr.strip()[:2000]}"
         )
+    return answers
+
+
+def line(case: Case, driver: str) -> list[str]:
+    return [driver, case.meter_id, case.key, ",".join(case.telegrams)]
+
+
+def run_batch(as_auto: bool) -> dict[str, str]:
+    """as_auto sends every case to a meter without a driver, as `type: auto` leaves one."""
+    cases = [c for c in CASES if c.driver in NAMES]
+    answers = run([line(c, "auto" if as_auto else NAMES[c.driver]) for c in cases])
     return {case.id: answer for case, answer in zip(cases, answers)}
 
 
@@ -336,7 +350,36 @@ def test_decode(case: Case, decoded: dict[str, str]) -> None:
 
 @pytest.mark.parametrize("case", parameters(KNOWN_DETECTION_DIFFS))
 def test_detection(case: Case, detected: dict[str, str]) -> None:
+    if not case.auto_detect:
+        pytest.skip("auto_detect = false")
     driver, _ = answer_of(detected[case.id])
     assert NAMES.get(driver, driver) == NAMES.get(case.driver, case.driver), (
         f"detected as {driver!r}"
     )
+
+
+BY_ID = {case.id: case for case in CASES}
+ENCRYPTED = BY_ID["amiplus-30584551"]  # AES-CBC in the TPL
+COMPACT = BY_ID["kamheat-46464646#2"]  # a full frame, then a compact one
+
+# Each error code from a driver test that otherwise decodes.
+ERROR_CASES = {
+    "no_key": replace(ENCRYPTED, key="NOKEY"),
+    "decryption_failed": replace(ENCRYPTED, key=bytes(b ^ 0xFF for b in bytes.fromhex(ENCRYPTED.key)).hex()),
+    # Only the full frame gives the compact one's format.
+    "not_understood": replace(COMPACT, telegrams=COMPACT.telegrams[1:]),
+    "unknown_driver": replace(ENCRYPTED, driver="none"),
+    "bad_key": replace(ENCRYPTED, key=ENCRYPTED.key[1:]),
+    "not_a_telegram": replace(ENCRYPTED, telegrams=["XX"]),
+}
+
+
+@pytest.fixture(scope="session")
+def errors() -> dict[str, str]:
+    answers = run([line(case, NAMES.get(case.driver, case.driver)) for case in ERROR_CASES.values()])
+    return dict(zip(ERROR_CASES, answers))
+
+
+@pytest.mark.parametrize("code", ERROR_CASES)
+def test_error(code: str, errors: dict[str, str]) -> None:
+    assert errors[code].removeprefix(ERROR_PREFIX).split(" ")[0] == code, errors[code]

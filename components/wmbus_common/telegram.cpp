@@ -60,10 +60,14 @@ static const char *media_name(std::span<const MediaType> table, uint8_t type) {
   return m == table.end() ? nullptr : m->name;
 }
 
-static const char *media_type_of(uint8_t type, uint16_t mfct) {
+std::string manufacturer_flag(uint16_t mfct) {
+  return {(char) (((mfct >> 10) & 0x1f) + 64), (char) (((mfct >> 5) & 0x1f) + 64), (char) ((mfct & 0x1f) + 64)};
+}
+
+const char *media_type_of(uint8_t type, uint16_t mfct) {
   if (const char *name = media_name(MEDIA_TYPES, type))
     return name;
-  if (type >= 0x1d && type <= 0x3f)
+  if (type == 0x1d || (type >= 0x1f && type <= 0x3f))
     return "reserved";
   if (mfct == manufacturer_code('T', 'C', 'H')) {
     if (const char *name = media_name(TCH_MEDIA_TYPES, type))
@@ -84,12 +88,10 @@ const Address &Telegram::meter_address() const { return tpl && tpl->address ? *t
 
 const char *Telegram::media_type() const { return media_type_of(sender().type, sender().mfct); }
 
-static uint32_t id_of(std::span<const uint8_t, 4> bytes) {
-  return esphome::encode_uint32(bytes[3], bytes[2], bytes[1], bytes[0]);
-}
+static uint32_t id_of(std::span<const uint8_t, 4> bytes) { return esphome::encode_value_le<uint32_t>(bytes.data()); }
 
 Address Address::parse(std::span<const uint8_t, 8> b) {
-  return {esphome::encode_uint16(b[1], b[0]), id_of(b.subspan<2, 4>()), b[6], b[7]};
+  return {esphome::encode_value_le<uint16_t>(b.data()), id_of(b.subspan<2, 4>()), b[6], b[7]};
 }
 
 static std::array<uint8_t, 8> bytes_of(const Address &a) {
@@ -129,7 +131,7 @@ static bool carries_records(uint8_t ci) {
 }
 
 static bool payload_crc_ok(std::span<const uint8_t> frame, size_t at) {
-  const uint16_t crc = esphome::encode_uint16(frame[at + 1], frame[at]);
+  const uint16_t crc = esphome::encode_value_le<uint16_t>(&frame[at]);
   return crc == wmbus::crc16_en13757(frame.subspan(at + 2));
 }
 
@@ -203,7 +205,7 @@ std::optional<Afl> Afl::parse(std::span<const uint8_t> frame, size_t at) {
   size_t pos = at + 2;  // CI and the AFL length
   const auto left = [&] { return frame.size() - pos; };
 
-  const uint16_t fc = esphome::encode_uint16(frame[pos + 1], frame[pos]);
+  const uint16_t fc = esphome::encode_value_le<uint16_t>(&frame[pos]);
   pos += 2;
   const bool has_key_info = fc & 0x0200;
   const bool has_mac = fc & 0x0400;
@@ -252,7 +254,7 @@ std::optional<Tpl> Tpl::parse(std::span<const uint8_t> frame, size_t at) {
         return {};
       // id(4) M(2) version type
       const std::span<const uint8_t, 8> b = frame.subspan(pos).first<8>();
-      tpl.address = Address{esphome::encode_uint16(b[5], b[4]), id_of(b.first<4>()), b[6], b[7]};
+      tpl.address = Address{esphome::encode_value_le<uint16_t>(&b[4]), id_of(b.first<4>()), b[6], b[7]};
       pos += 8;
       [[fallthrough]];
     }
@@ -262,7 +264,7 @@ std::optional<Tpl> Tpl::parse(std::span<const uint8_t> frame, size_t at) {
         return {};
       tpl.acc = frame[pos++];
       tpl.sts = frame[pos++];
-      const uint16_t cfg = esphome::encode_uint16(frame[pos + 1], frame[pos]);
+      const uint16_t cfg = esphome::encode_value_le<uint16_t>(&frame[pos]);
       pos += 2;
 
       tpl.sec_mode = (cfg >> 8) & 0x1f;
@@ -278,7 +280,7 @@ std::optional<Tpl> Tpl::parse(std::span<const uint8_t> frame, size_t at) {
         // Mode 10 extension: tag size, KDF, key id, key version flag; then a 4 byte message counter.
         if (left() < 2)
           return {};
-        const uint16_t cfe = esphome::encode_uint16(frame[pos + 1], frame[pos]);
+        const uint16_t cfe = esphome::encode_value_le<uint16_t>(&frame[pos]);
         pos += 2;
         CcmHeader ccm{};
         ccm.tag_size = (uint8_t) (4 + ((cfe >> 8) & 0x03) * 4);
@@ -366,6 +368,8 @@ bool Telegram::check_2f2f() {
 }
 
 bool Telegram::potentially_decrypt(Key &key) {
+  if (tpl->num_encr_blocks && tpl->num_encr_blocks * 16u < left())
+    encrypted_end_ = pos_ + tpl->num_encr_blocks * 16;
   switch (tpl->sec_mode) {
     case TPL_NO_SECURITY:
       // Unencrypted although a key is configured: rejected, as upstream does.
@@ -402,48 +406,46 @@ bool Telegram::potentially_decrypt(Key &key) {
 bool Telegram::parse_compact_apl(CompactFormats &formats) {
   if (left() < 2)
     return false;
-  const uint16_t signature = esphome::encode_uint16(frame[pos_ + 1], frame[pos_]);
+  const uint16_t signature = esphome::encode_value_le<uint16_t>(&frame[pos_]);
   pos_ += 2;
 
   // Unknown until a full frame from this meter has arrived.
   const std::optional<std::span<const uint8_t>> format = formats.lookup(signature);
   if (!format || left() < 2)
     return false;
-  pos_ += 2;  // the crc of the full frame
+  const uint16_t full_frame_crc = esphome::encode_value_le<uint16_t>(&frame[pos_]);
+  pos_ += 2;
   header_size = (uint16_t) pos_;
-  read_records(format, formats);
-  return true;
+  CompactFrame compact{*format, encrypted_end_, {}};
+  records = parse_records(frame, payload(), &compact);
+  return wmbus::crc16_en13757(compact.full_frame) == full_frame_crc;
 }
 
-bool Telegram::decode(Key &key, CompactFormats &formats, std::optional<PayloadQuirk> quirk) {
+DecodeError Telegram::decode(Key &key, CompactFormats &formats, std::optional<PayloadQuirk> quirk) {
   quirk_ = quirk;
   if (!tpl) {
     if (!key)
-      return false;
+      return DecodeError::NoKey;
     // AES-CTR always "succeeds"; a wrong key yields junk and a bad CRC.
     aes_ctr_decrypt(pos_, *key);
-    if (!payload_crc_ok(frame, pos_)) {
-      decryption_failed = true;
-      return false;
-    }
+    if (!payload_crc_ok(frame, pos_))
+      return DecodeError::DecryptionFailed;
     pos_ += 2;
     if (!parse_below_ell())
-      return false;
+      return DecodeError::NotUnderstood;
   }
   if (!carries_records(tpl->ci))
-    return true;
+    return DecodeError::None;
 
   const bool no_header = tpl->ci == 0x78 || tpl->ci == 0x79;
-  if (!no_header && !potentially_decrypt(key)) {
-    decryption_failed = true;
-    return false;
-  }
+  if (!no_header && !potentially_decrypt(key))
+    return key ? DecodeError::DecryptionFailed : DecodeError::NoKey;
 
   if (tpl->ci == 0x73 || tpl->ci == 0x79 || tpl->ci == 0x7B)
-    return parse_compact_apl(formats);
+    return parse_compact_apl(formats) ? DecodeError::None : DecodeError::NotUnderstood;
   header_size = (uint16_t) pos_;
-  read_records(std::nullopt, formats);
-  return true;
+  read_records(formats);
+  return DecodeError::None;
 }
 
 std::array<uint8_t, 16> Telegram::tpl_iv() const {
@@ -484,8 +486,7 @@ std::array<uint8_t, 13> Telegram::ccm_nonce() const {
 static std::array<uint8_t, 16> ccm_counter_block(std::span<const uint8_t, 13> nonce, uint16_t i) {
   std::array<uint8_t, 16> a{0x01};
   std::ranges::copy(nonce, a.begin() + 1);
-  a[14] = (uint8_t) (i >> 8);
-  a[15] = (uint8_t) i;
+  esphome::put_be16(&a[14], i);
   return a;
 }
 
@@ -593,10 +594,8 @@ DerivedKeys Telegram::derive_keys(std::span<const uint8_t, 16> key) const {
   return derived;
 }
 
-void Telegram::read_records(std::optional<std::span<const uint8_t>> format, CompactFormats &formats) {
-  records = parse_records(frame, payload(), format);
-  if (format)
-    return;
+void Telegram::read_records(CompactFormats &formats) {
+  records = parse_records(frame, payload(), nullptr);
   // Its CRC is the signature later compact frames arrive under; upstream leaves the 0x0f marker out.
   std::vector<uint8_t> layout;
   for (const Record &r : records) {

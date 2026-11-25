@@ -26,5 +26,7 @@ def config_schema(radio_type, radio_schema):
 
 async def to_code(config):
     var = await register_transceiver(config)
+
     cg.add(var.set_lna_boost(config[CONF_LNA_BOOST]))
+
     return var

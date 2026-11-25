@@ -32,6 +32,10 @@ constexpr uint16_t manufacturer_code(char a, char b, char c) {
   return (uint16_t) (((a - 64) << 10) | ((b - 64) << 5) | (c - 64));
 }
 
+std::string manufacturer_flag(uint16_t mfct);
+// wmbusmeters naming, e.g. "water".
+const char *media_type_of(uint8_t type, uint16_t mfct);
+
 struct Telegram;
 
 using Key = std::optional<std::array<uint8_t, 16>>;
@@ -82,6 +86,8 @@ enum class PayloadQuirk : uint8_t {
   Sanxing609B,
   TryQundisDecode,
 };
+
+enum class DecodeError : uint8_t { None, UnknownDriver, NoKey, DecryptionFailed, NotUnderstood };
 
 struct Address {
   uint16_t mfct;
@@ -155,7 +161,6 @@ struct Telegram {
   uint16_t header_size = 0;
   uint16_t suffix_size = 0;
 
-  bool decryption_failed = false;
   Status decoding_errors;
 
   std::vector<Record> records;
@@ -170,13 +175,12 @@ struct Telegram {
   // The layers up to and including the addresses.
   bool parse_envelope(std::span<const uint8_t> data);
   // `key` may be replaced by a manufacturer default key.
-  bool decode(Key &key, CompactFormats &formats, std::optional<PayloadQuirk> quirk);
+  DecodeError decode(Key &key, CompactFormats &formats, std::optional<PayloadQuirk> quirk);
 
   bool add_ixml_records(int base_offset, std::span<const uint8_t> bytes, const IxmlGrammar &grammar);
 
   // The deepest layer's address.
   const Address &sender() const;
-  // wmbusmeters naming, e.g. "water".
   const char *media_type() const;
 
   // Mode 5; drivers' transform_payload uses it too.
@@ -185,6 +189,7 @@ struct Telegram {
 
  private:
   size_t pos_ = 0;
+  size_t encrypted_end_ = 0;
   std::optional<PayloadQuirk> quirk_;
 
   // What the TPL encryption binds to: the long header's address, else the DLL's.
@@ -199,7 +204,7 @@ struct Telegram {
   // An entry with the same key is overwritten, as upstream does.
   IxmlEntry &ixml_entry_for(std::span<const uint8_t> key);
   // Also learns a full frame's layout for later compact frames.
-  void read_records(std::optional<std::span<const uint8_t>> format, CompactFormats &formats);
+  void read_records(CompactFormats &formats);
 
   std::array<uint8_t, 13> ccm_nonce() const;
   std::array<uint8_t, 16> ccm_tag(std::span<const uint8_t, 16> key, std::span<const uint8_t, 13> nonce,

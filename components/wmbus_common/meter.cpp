@@ -69,7 +69,7 @@ void MeterState::extract_numeric(const FieldSpec &f, const Record &dve) {
   if (f.date_record) {
     DecodedDate date = dve.extract_date();
     // An unset date (0xffff and its like) is null, not a year 2127.
-    value = date.valid ? (double) mktime(&date.value) : NOT_A_NUMBER;
+    value = date.valid ? (double) epoch_utc(date.value) : NOT_A_NUMBER;
   }
   value *= f.scale;
   if (!f.any_factors.empty())
@@ -84,6 +84,17 @@ void MeterState::extract_tpl_status(const FieldSpec &f, const Telegram &t) {
   status.add("OK");
   status.add(spec->tpl_status->translate(t.tpl->sts));
   values[f.slot] = status.str();
+}
+
+static std::string header_coded_text(const Record &dve, TextForm form) {
+  const bool is_manufacturer = form == TextForm::Manufacturer;
+  const uint8_t integer_dif = is_manufacturer ? 0x02 : 0x01;
+  if ((dve.dif & 0x0f) != integer_dif)
+    return dve.readable_string(false);
+  const std::optional<uint64_t> code = dve.extract_long();
+  if (!code)
+    return "";
+  return is_manufacturer ? manufacturer_flag((uint16_t) *code) : media_type_of((uint8_t) *code, 0);
 }
 
 void MeterState::extract_string(const FieldSpec &f, const Telegram &t, const Record &dve) {
@@ -123,6 +134,10 @@ void MeterState::extract_string(const FieldSpec &f, const Telegram &t, const Rec
       break;
     case TextForm::Hex:
       values[f.slot] = dve.hex_string();
+      break;
+    case TextForm::Manufacturer:
+    case TextForm::Medium:
+      values[f.slot] = header_coded_text(dve, f.text_form);
       break;
   }
 }
@@ -452,8 +467,7 @@ static std::vector<DetectSpec> identities_of(const Telegram &t) {
 
 string DetectSpec::as_mvt() const {
   char buf[16];
-  snprintf(buf, sizeof(buf), "%c%c%c,%02x,%02x", (char) (((mfct >> 10) & 0x1f) + 64),
-           (char) (((mfct >> 5) & 0x1f) + 64), (char) ((mfct & 0x1f) + 64), version, type);
+  snprintf(buf, sizeof(buf), "%s,%02x,%02x", manufacturer_flag(mfct).c_str(), version, type);
   return buf;
 }
 
@@ -463,6 +477,7 @@ Result MeterState::handle_telegram(std::span<const uint8_t> frame, int rssi, tim
   if (!t.parse_envelope(frame) || !(t.dll.address.id == id || names_us(t.ell) || names_us(t.tpl)))
     return Result::NotForThisMeter;
 
+  media_type = t.media_type();
   if (spec == nullptr) {
     const DriverSpec *detected = nullptr;
     string tried;
@@ -474,29 +489,28 @@ Result MeterState::handle_telegram(std::span<const uint8_t> frame, int rssi, tim
     }
 
     if (detected == nullptr) {
-      last_error = "no compiled driver detects " + tried;
+      last_error = {DecodeError::UnknownDriver, tried};
       return Result::NotDecoded;
     }
     bind_driver(*detected);
   }
 
-  if (!t.decode(key, formats, spec->payload_quirk) ||
-      (spec->payload_quirk == PayloadQuirk::DiehlPrios && !decode_diehl_prios(t))) {
-    last_error = t.decryption_failed ? "decryption failed"
-                 : key               ? "payload not understood"
-                                     : "encrypted, no key configured";
-    if (!t.decoding_errors.empty())
-      last_error += " (" + t.decoding_errors.str() + ")";
+  if (spec->force_media_type != nullptr)
+    media_type = spec->force_media_type;
+  DecodeError code = t.decode(key, formats, spec->payload_quirk);
+  if (code == DecodeError::None && spec->payload_quirk == PayloadQuirk::DiehlPrios && !decode_diehl_prios(t))
+    code = key ? DecodeError::DecryptionFailed : DecodeError::NoKey;
+  if (code != DecodeError::None) {
+    last_error = {code, t.decoding_errors.str()};
     return Result::NotDecoded;
   }
 
   rssi_dbm = rssi;
-  media_type = spec->force_media_type != nullptr ? spec->force_media_type : t.media_type();
   run_decoders(t);
   process_field_extractors(t);
 
   decoding_errors = t.decoding_errors;
-  last_error.clear();
+  last_error = {};
   timestamp = at ? at : time(nullptr);
   return Result::Ok;
 }
@@ -516,12 +530,12 @@ Value MeterState::value(const string &name) const {
 }
 
 string MeterState::to_json() const {
-  JsonDocument doc;
-  JsonObject root = doc.to<JsonObject>();
+  esphome::json::JsonBuilder builder;
+  JsonObject root = builder.root();
   root["_"] = "telegram";
-  root["media"] = media_type;
+  root["media"] = esphome::json::linked(media_type);
   if (spec != nullptr)
-    root["driver"] = spec->name;
+    root["driver"] = esphome::json::linked(spec->name);
   char id_buf[9];
   snprintf(id_buf, sizeof(id_buf), "%08x", (unsigned) id);
   root["id"] = id_buf;
@@ -532,11 +546,11 @@ string MeterState::to_json() const {
       if (holds_alternative<monostate>(v))
         continue;
       if (const double *number = get_if<double>(&v); number && f.json_date && !std::isnan(*number))
-        root[f.name] = format_time(*number, *f.json_date);
+        root[esphome::json::linked(f.name)] = format_time(*number, *f.json_date);
       else if (number)
-        root[f.name] = *number;
+        root[esphome::json::linked(f.name)] = *number;
       else
-        root[f.name] = get<string>(v);
+        root[esphome::json::linked(f.name)] = get<string>(v);
     }
   }
 
@@ -544,9 +558,7 @@ string MeterState::to_json() const {
     root["timestamp"] = format_time((double) *timestamp, TimeFormat::TimestampUTC);
   root["rssi_dbm"] = rssi_dbm;
 
-  string out;
-  serializeJson(doc, out);
-  return out;
+  return builder.serialize();
 }
 
 const DriverSpec *detect_driver(uint16_t mfct, uint8_t version, uint8_t type) {
@@ -577,15 +589,14 @@ double counter_value(const Record *dve, DVEntryCounterType counter) {
 
 // A date literal converts as UTC calendar time.
 double datetime_literal(int year, int month, int day, int hour, int minute, int second) {
-  struct tm t{};
+  tm t{};
   t.tm_year = year - 1900;
   t.tm_mon = month - 1;
   t.tm_mday = day;
   t.tm_hour = hour;
   t.tm_min = minute;
   t.tm_sec = second;
-  t.tm_isdst = 0;
-  return (double) mktime(&t);
+  return (double) epoch_utc(t);
 }
 
 double make_date(double year, double month, double day) {
@@ -595,12 +606,11 @@ double make_date(double year, double month, double day) {
   if (m <= 0 || d <= 0)
     return NOT_A_NUMBER;
 
-  struct tm t{};
+  tm t{};
   t.tm_year = y - 1900;
   t.tm_mon = m - 1;
   t.tm_mday = d;
-  t.tm_isdst = 0;
-  return (double) mktime(&t);
+  return (double) epoch_utc(t);
 }
 
 }  // namespace wmbus

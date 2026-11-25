@@ -166,7 +166,7 @@ For both `sensor` and `text_sensor`, all config from generic [Sensor](https://es
 
 ## `wmbus_radio`
 This component provides a radio interface for 868 MHz LoRa transceivers, allowing it to receive wM-Bus packets. It supports Semtech SX1276 (RFM95/RFM96) and SX1262 modules.
-It needs ESPHome 2026.8.0 or newer and an `spi` component configured.
+It needs an `spi` component configured.
 
 **SX1276 example:**
 
@@ -190,7 +190,7 @@ wmbus_radio:
         format: rtlwmbus
 ```
 
-`reset_pin` and `dio1_pin` go to the RESET and DIO1 pins of the radio module. `irq_pin` is the old name of `dio1_pin`; it still works with a deprecation warning and will be removed in 2027.3.0. For SX1276 only, `lna_boost` is an optional boolean setting (default `false`) that enables the HF receiver LNA boost during setup. It does not change transmit power and is not a runtime Home Assistant switch. Boosted gain can use more current and may not improve reception in environments with strong interference or very strong signals.
+`reset_pin` and `dio1_pin` go to the RESET and DIO1 pins of the radio module. `irq_pin` is the old name of `dio1_pin`; it still works with a deprecation warning and will be removed in 2027.3.0. `lna_boost` (default `false`) boosts the LNA, trading a little more current for better sensitivity.
 
 **SX1262 example:**
 

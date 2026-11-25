@@ -1,7 +1,6 @@
 #pragma once
 
 #include <array>
-#include <forward_list>
 
 #include "esphome/core/component.h"
 #include "esphome/core/helpers.h"
@@ -30,8 +29,8 @@ template<typename Derived, typename T> class ReadOnlyEntity : public ReadableEnt
     auto value = extractor_->decode(data);
 
     if (!value.has_value() || publish_dedup_.next(*value) == false) {
-      auto name = static_cast<Derived *>(this)->get_name();
-      ESP_LOGV("ReadableEntity", "Value unchanged for %s, not publishing", name.c_str());
+      ESP_LOGV("ReadableEntity", "Value unchanged for %s, not publishing",
+               LOG_STR_ARG(static_cast<Derived *>(this)->get_log_name()));
 
       return;
     }
@@ -64,46 +63,34 @@ class ReadWriteEntity : public ReadOnlyEntity<Derived, T>, public WriteOnlyEntit
   }
 };
 
-template<typename Target> struct Variant {
-  using Condition = bool (*)(std::span<const uint8_t> data);
-  using Apply = void (*)(Target *);
-
-  Condition condition;
-  Apply apply;
-};
-
-template<typename Derived, typename Target = Derived> class VariantMixin {
+template<typename Derived> class VariantMixin {
  public:
-  using VariantType = Variant<Target>;
+  struct Variant {
+    bool (*condition)(std::span<const uint8_t> data);
+    void (*apply)(Derived *);
+  };
 
-  VariantMixin() = default;
-
-  void set_variants(uint32_t pref_key, std::span<const VariantType> variants) {
-    this->pref_key_ = pref_key;
-    this->variants_ = variants;
-  }
+  void set_variants(std::span<const Variant> variants) { this->variants_ = variants; }
 
   void setup_variants() {
-    this->variant_pref_ = global_preferences->make_preference<uint8_t>(this->pref_key_);
+    this->variant_pref_ = static_cast<Derived *>(this)->template make_entity_preference<uint8_t>();
 
     uint8_t saved_index = 0;
-    if (this->variant_pref_.load(&saved_index) && saved_index <= this->variants_.size()) {
+    if (this->variant_pref_.load(&saved_index) && saved_index < this->variants_.size()) {
       this->variant_index_ = saved_index;
     }
 
-    auto name = static_cast<Derived *>(this)->get_name();
-    ESP_LOGI("panasonic_aquarea", "%s loaded variant %u from preferences", name.c_str(), this->variant_index_);
+    ESP_LOGI("panasonic_aquarea", "%s loaded variant %u from preferences",
+             LOG_STR_ARG(static_cast<Derived *>(this)->get_log_name()), this->variant_index_);
 
-    if (this->variant_index_ > 0) {
-      this->variants_[this->variant_index_ - 1].apply(static_cast<Target *>(static_cast<Derived *>(this)));
-    }
+    this->variants_[this->variant_index_].apply(static_cast<Derived *>(this));
   }
 
   void evaluate_variants(std::span<const uint8_t> data) {
     uint8_t matched_variant = 0;
     for (size_t i = 0; i < this->variants_.size(); i++) {
       if (this->variants_[i].condition(data)) {
-        matched_variant = static_cast<uint8_t>(i + 1);
+        matched_variant = static_cast<uint8_t>(i);
         break;
       }
     }
@@ -111,40 +98,24 @@ template<typename Derived, typename Target = Derived> class VariantMixin {
     if (this->variant_index_ != matched_variant) {
       this->variant_index_ = matched_variant;
       this->variant_pref_.save(&this->variant_index_);
-      auto name = static_cast<Derived *>(this)->get_name();
       ESP_LOGI("panasonic_aquarea", "%s detected variant %u, saved to preferences (applied after restart)",
-               name.c_str(), matched_variant);
+               LOG_STR_ARG(static_cast<Derived *>(this)->get_log_name()), matched_variant);
     }
   }
 
  protected:
-  uint32_t pref_key_{0};
   uint8_t variant_index_{0};
-  std::span<const VariantType> variants_{};
+  std::span<const Variant> variants_{};
   ESPPreferenceObject variant_pref_;
 };
 
 class Device : public PollingComponent, public uart::UARTDevice {
- public:
-  class SupportsExtraQueryEntity : public ReadOnlyEntity<SupportsExtraQueryEntity, bool> {
-   private:
-    static constexpr size_t EXTRA_SUPPORT_BYTE_INDEX = 199;
-    static constexpr uint8_t EXTRA_SUPPORT_THRESHOLD = 0x03;
-
-   public:
-    SupportsExtraQueryEntity();
-
-    bool state{false};
-    void publish_state(bool value);
-    const std::string get_name() const;
-  };
-
  protected:
   uart::UARTComponent *external_controller_{nullptr};
 
-  SupportsExtraQueryEntity supports_extra_query_entity_;
-  std::forward_list<ReadableEntity *> standard_response_entities_;
-  std::forward_list<ReadableEntity *> extra_response_entities_;
+  bool supports_extra_query_{false};
+  std::span<ReadableEntity *const> entities_;
+  size_t standard_entities_count_{0};
 
   Protocol::RequestFrame awaiting_command_data{};
   bool awaiting_command_dirty_flag_{false};
@@ -161,7 +132,7 @@ class Device : public PollingComponent, public uart::UARTDevice {
   bool start_response_timeout(bool internal);
   void stop_response_timeout();
 
-  Protocol::Parser response_parser_;
+  Protocol::ResponseReader response_reader_;
 
   uint32_t request_counter_{0};
 
@@ -175,7 +146,7 @@ class Device : public PollingComponent, public uart::UARTDevice {
   void process_external_controller_data();
 
   // Response handling
-  void handle_response();
+  void handle_response(std::span<const uint8_t> frame);
 
  public:
   void set_external_controller_uart(uart::UARTComponent *controller);
@@ -183,8 +154,10 @@ class Device : public PollingComponent, public uart::UARTDevice {
   void loop() override;
   void update() override;
   void dump_config() override;
-  float get_setup_priority() const override;
-  void add_entity(ReadableEntity *entity, bool extra = false);
+  void set_entities(std::span<ReadableEntity *const> entities, size_t standard_count) {
+    this->entities_ = entities;
+    this->standard_entities_count_ = standard_count;
+  }
   Protocol::RequestFrame &get_command_data() {
     this->awaiting_command_dirty_flag_ = true;
     return this->awaiting_command_data;

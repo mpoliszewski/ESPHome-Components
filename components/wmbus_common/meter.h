@@ -27,7 +27,7 @@ struct RangeFactor {
   double factor;
 };
 
-enum class TextForm : uint8_t { Hex, Readable, Reversed, Date, DateTime };
+enum class TextForm : uint8_t { Hex, Readable, Reversed, Date, DateTime, Manufacturer, Medium };
 
 // JSON prints it as null.
 inline constexpr double NOT_A_NUMBER = std::numeric_limits<double>::quiet_NaN();
@@ -52,7 +52,7 @@ struct CounterRange {
   int16_t from;
   int16_t to;
 
-  constexpr bool contains(int32_t nr) const { return nr >= from && nr <= to; }
+  constexpr bool contains(int64_t nr) const { return nr >= from && nr <= to; }
 };
 
 using MaybeRange = std::optional<CounterRange>;
@@ -114,6 +114,18 @@ enum class Result : uint8_t {
   NotForThisMeter,
   NotDecoded,  // see last_error
   Ok,
+};
+
+// Why the last telegram was not decoded; None once one is.
+struct LastError {
+  DecodeError code = DecodeError::None;
+  std::string detail;  // what the code leaves out: the identities tried, the decoding errors
+
+  // What the browser module and the test runners report.
+  const char *name() const {
+    static constexpr const char *NAMES[] = {"", "unknown_driver", "no_key", "decryption_failed", "not_understood"};
+    return NAMES[static_cast<size_t>(code)];
+  }
 };
 
 // A `calculate` formula compiled to C++; `dve` is null for a field without a matcher.
@@ -197,7 +209,7 @@ struct MeterState {
   std::optional<time_t> timestamp;
   const char *media_type = nullptr;
   Status decoding_errors;
-  std::string last_error;
+  LastError last_error;
 
   // Outlives the telegram: a compact frame refers to a layout learned earlier.
   CompactFormats formats;
@@ -250,12 +262,14 @@ inline uint64_t as_integer(double v) { return (uint64_t) __builtin_llround(v); }
 
 inline double modulo(double l, double r) { return r == 0.0 ? __builtin_nan("") : __builtin_fmod(l, r); }
 
+inline bool is_shift_defined(double l, double r) { return !__builtin_isnan(l) && r >= 0.0 && r <= 63.0; }
+
 inline double shift_left(double l, double r) {
-  return (r < 0.0 || r > 63.0) ? __builtin_nan("") : (double) (as_integer(l) << as_integer(r));
+  return is_shift_defined(l, r) ? (double) (as_integer(l) << as_integer(r)) : __builtin_nan("");
 }
 
 inline double shift_right(double l, double r) {
-  return (r < 0.0 || r > 63.0) ? __builtin_nan("") : (double) (as_integer(l) >> as_integer(r));
+  return is_shift_defined(l, r) ? (double) (as_integer(l) >> as_integer(r)) : __builtin_nan("");
 }
 
 inline double bit_and(double l, double r) { return (double) (as_integer(l) & as_integer(r)); }

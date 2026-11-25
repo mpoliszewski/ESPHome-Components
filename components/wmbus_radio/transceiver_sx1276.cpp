@@ -5,7 +5,7 @@
 namespace esphome {
 namespace wmbus_radio {
 
-static const char *TAG = "SX1276";
+ESPHOME_LOG_TAG(TAG, "SX1276");
 static constexpr uint32_t F_OSC = 32000000;
 
 enum class SX1276::Register : uint8_t {
@@ -45,7 +45,7 @@ void SX1276::setup() {
   ESP_LOGVV(TAG, "revision: %02X", revision);
   if (revision < 0x11 || revision > 0x13) {
     ESP_LOGE(TAG, "Invalid silicon revision: %02X", revision);
-    this->mark_failed();
+    this->mark_failed(LOG_STR("Invalid silicon revision"));
     return;
   }
 
@@ -80,12 +80,9 @@ void SX1276::setup() {
   constexpr uint8_t agc_afc = (1 << 4) | (1 << 3) | 0b110;
   this->write_register(Register::RX_CONFIG, {agc_afc});
 
-  if (this->lna_boost_) {
-    uint8_t lna = this->read_register(Register::LNA);
-    lna = (lna & 0xFC) | 0x03;
-    this->write_register(Register::LNA, {lna});
-    ESP_LOGI(TAG, "SX1276 HF LNA boost enabled");
-  }
+  ESP_LOGVV(TAG, "%s HF LNA boost", this->lna_boost_ ? "enable" : "disable");
+  const uint8_t lna = 0x20 | (this->lna_boost_ ? 0b11 : 0);
+  this->write_register(Register::LNA, {lna});
 
   ESP_LOGVV(TAG, "disable clock output");
   this->write_register(Register::OSC, {0b111});
@@ -107,6 +104,11 @@ void SX1276::setup() {
   this->write_register(Register::RSSI_CONFIG, {0b111});
 
   ESP_LOGI(TAG, "SX1276 setup done");
+}
+
+void SX1276::dump_config() {
+  Transceiver::dump_config();
+  ESP_LOGCONFIG(TAG, "LNA boost: %s", YESNO(this->lna_boost_));
 }
 
 void SX1276::start_receiver(TaskHandle_t receiver_task) {
@@ -139,11 +141,9 @@ bool SX1276::read(std::span<uint8_t> buffer, TickType_t first_byte_timeout) {
 
 void SX1276::reset_receiver() {
   this->write_register(Register::OP_MODE, {0b001});
-  delay(5);
   this->write_register(Register::IRQ_FLAGS2, {1 << 4});
   ulTaskNotifyTake(pdTRUE, 0);
   this->write_register(Register::OP_MODE, {0b101});
-  delay(5);
 }
 
 int8_t SX1276::get_rssi() {
@@ -154,9 +154,11 @@ int8_t SX1276::get_rssi() {
 const char *SX1276::get_name() { return TAG; }
 
 uint8_t SX1276::read_register(Register address) {
-  std::array<uint8_t, 2> transaction{static_cast<uint8_t>(address), 0x00};
-  this->spi_transaction(transaction);
-  return transaction[1];
+  this->enable();
+  this->write_byte(static_cast<uint8_t>(address));
+  const uint8_t value = this->read_byte();
+  this->disable();
+  return value;
 }
 
 void SX1276::write_register(Register address, std::initializer_list<uint8_t> data) {

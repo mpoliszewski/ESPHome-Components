@@ -5,8 +5,7 @@
 
 namespace esphome {
 namespace wmbus_common {
-
-static const char *TAG = "wmbus_common";
+ESPHOME_LOG_TAG(TAG, "wmbus_common");
 
 void WMBusCommon::dump_config() {
   ESP_LOGCONFIG(TAG, "wM-Bus Component:");

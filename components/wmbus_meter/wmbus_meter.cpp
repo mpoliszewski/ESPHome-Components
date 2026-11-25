@@ -6,7 +6,7 @@
 
 namespace esphome {
 namespace wmbus_meter {
-static const char *TAG = "wmbus_meter";
+ESPHOME_LOG_TAG(TAG, "wmbus_meter");
 
 void Meter::set_driver(const wmbus::DriverSpec *spec, uint32_t id, std::optional<std::array<uint8_t, 16>> key) {
   this->state_ = wmbus::MeterState(spec, id, std::move(key));
@@ -15,7 +15,6 @@ void Meter::set_driver(const wmbus::DriverSpec *spec, uint32_t id, std::optional
 std::string Meter::get_id() const { return str_sprintf("%08x", (unsigned) this->state_.id); }
 
 void Meter::set_radio(wmbus_radio::Radio *radio) {
-  this->radio = radio;
   radio->on_frame([this](wmbus_radio::Frame *frame) { return this->handle_frame(frame); });
 }
 
@@ -26,10 +25,6 @@ void Meter::dump_config() {
   ESP_LOGCONFIG(TAG, "  Key: %s", this->state_.key ? "***" : "not-encrypted");
 }
 
-void Meter::on_telegram(std::function<void()> &&callback) {
-  this->on_telegram_callback_manager.add(std::move(callback));
-}
-
 void Meter::handle_frame(wmbus_radio::Frame *frame) {
   switch (this->state_.handle_telegram(frame->data(), frame->rssi())) {
     case wmbus::Result::NotForThisMeter:
@@ -38,13 +33,13 @@ void Meter::handle_frame(wmbus_radio::Frame *frame) {
     case wmbus::Result::NotDecoded:
       // Ours but unreadable: sensors are not refreshed with stale values.
       frame->mark_as_handled();
-      ESP_LOGW(TAG, "Telegram from %08x could not be decoded: %s", (unsigned) this->state_.id,
-               this->state_.last_error.c_str());
+      ESP_LOGW(TAG, "Telegram from %08x could not be decoded: %s %s", (unsigned) this->state_.id,
+               this->state_.last_error.name(), this->state_.last_error.detail.c_str());
       return;
 
     case wmbus::Result::Ok:
       frame->mark_as_handled();
-      this->defer([this]() { this->on_telegram_callback_manager(); });
+      this->defer([this]() { this->on_telegram_callback_manager_(); });
       return;
   }
 }
@@ -55,7 +50,7 @@ std::string Meter::as_json() {
   return this->state_.to_json();
 }
 
-optional<std::string> Meter::get_string_field(std::string field_name) {
+optional<std::string> Meter::get_string_field(const std::string &field_name) {
   if (!this->state_.timestamp)
     return {};
   if (field_name == "media")
@@ -74,7 +69,7 @@ optional<std::string> Meter::get_string_field(std::string field_name) {
   return std::get<std::string>(value);
 }
 
-optional<float> Meter::get_numeric_field(std::string field_name) {
+optional<float> Meter::get_numeric_field(const std::string &field_name) {
   if (!this->state_.timestamp)
     return {};
 
